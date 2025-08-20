@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="9e75908d-18a1-49d4-90ba-0ad826df7ddc" name="raporlama">
+        <fileTransfer rootFolder="/home/ubuntu" accessType="SFTP" host="3.64.110.255" port="22" sshConfigId="bafdef19-59d8-49ab-9725-a812a64b9e65" sshConfig="ubuntu@3.64.110.255:22 key" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
