@@ -11,10 +11,11 @@ def build_sidebar():
     st.sidebar.page_link("pages/01_Rapor_Yaz.py", label="📝 Rapor Yaz")
     st.sidebar.page_link("pages/02_Gecmisim.py", label="📚 Geçmişim")
     st.sidebar.page_link("pages/03_Departman_Raporlari.py", label="🏢 Departman Raporları")
+    st.sidebar.page_link("pages/07_Gorevlerim_Todo.py", label="✅ Görevlerim (To-Do)")
 
     if role_weight(role) >= role_weight(ROLE_ADMIN):
         st.sidebar.markdown("---")
-        st.sidebar.page_link("pages/06_Rapor_Yorumlari.py", label="🗨️ Rapor Yorumları")
+        st.sidebar.page_link("pages/06_Rapor_Yorumlari.py", label="🗨️ Rapor Yorumları (Admin)")
         st.sidebar.page_link("pages/05_Raporlama_Istatistik.py", label="📊 Raporlama & İstatistik")
         st.sidebar.page_link("pages/04_Yonetim.py", label="🛠️ Yönetim")
 

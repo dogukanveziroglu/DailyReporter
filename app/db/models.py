@@ -3,7 +3,7 @@ from datetime import datetime, date
 from typing import Optional, List
 
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import Integer, String, Text, DateTime, Date, ForeignKey
+from sqlalchemy import Integer, String, Text, DateTime, Date, ForeignKey, Boolean
 
 from app.db.database import Base
 
@@ -84,6 +84,11 @@ class User(Base):
         "Report", back_populates="user", cascade="all, delete-orphan"
     )
 
+    # Yeni: kullanıcının görevleri
+    todos: Mapped[List["Todo"]] = relationship(
+        "Todo", back_populates="user", cascade="all, delete-orphan"
+    )
+
 
 class Report(Base):
     __tablename__ = "reports"
@@ -97,7 +102,7 @@ class Report(Base):
     project: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     tags_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    # ← ÖNEMLİ: NOT NULL updated_at alanı
+    # NOT NULL updated_at alanı
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
@@ -123,3 +128,22 @@ class Comment(Base):
 
     report: Mapped["Report"] = relationship("Report", back_populates="comments")
     author: Mapped["User"] = relationship("User")
+
+
+class Todo(Base):
+    __tablename__ = "todos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, default=2, nullable=False)  # 1=Düşük, 2=Normal, 3=Yüksek
+    is_done: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped["User"] = relationship("User", back_populates="todos")

@@ -3,10 +3,11 @@ from typing import Optional, List, Dict
 from datetime import date, datetime
 import json
 
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, and_, func
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.exc import IntegrityError
 
-from app.db.models import User, Report, Department, Team, Comment
+from app.db.models import User, Report, Department, Team, Comment, Todo
 from app.core.security import hash_password, verify_password
 from app.core.rbac import ROLE_LEAD
 
@@ -190,13 +191,12 @@ def upsert_report(
         r.content = content
         r.project = project
         r.tags_json = tags_json
-        r.updated_at = datetime.utcnow()  # ← kritik
+        r.updated_at = datetime.utcnow()
         db.commit()
         db.refresh(r)
         return r
     r = Report(
         user_id=user_id, date=d, content=content, project=project, tags_json=tags_json
-        # created_at ve updated_at otomatik dolacak
     )
     db.add(r)
     db.commit()
@@ -212,6 +212,8 @@ def create_report_revision(
     project: Optional[str],
     edited_at_iso: str,
 ) -> Report:
+    """İdeal: aynı gün için YENİ satır.
+    Eğer DB'de (user_id, date) UNIQUE varsa, geçici olarak mevcut satırı günceller."""
     tags = {"edited": True, "edited_at": edited_at_iso}
     r = Report(
         user_id=user_id,
@@ -219,12 +221,33 @@ def create_report_revision(
         content=content,
         project=project,
         tags_json=json.dumps(tags, ensure_ascii=False),
-        # created_at/updated_at otomatik
     )
     db.add(r)
-    db.commit()
-    db.refresh(r)
-    return r
+    try:
+        db.commit()
+        db.refresh(r)
+        return r
+    except IntegrityError as e:
+        db.rollback()
+        if "reports.user_id, reports.date" in str(e):
+            existing = get_report(db, user_id=user_id, d=d)
+            if existing:
+                try:
+                    t = json.loads(existing.tags_json or "{}")
+                    if not isinstance(t, dict):
+                        t = {}
+                except Exception:
+                    t = {}
+                t["edited"] = True
+                t["edited_at"] = edited_at_iso
+                existing.content = content
+                existing.project = project
+                existing.tags_json = json.dumps(t, ensure_ascii=False)
+                existing.updated_at = datetime.utcnow()
+                db.commit()
+                db.refresh(existing)
+                return existing
+        raise
 
 def list_user_reports(
     db: Session, *, user_id: int, start: date, end: date, q: Optional[str]
@@ -296,3 +319,93 @@ def list_comments_by_report_ids(db: Session, *, report_ids: List[int]) -> Dict[i
     for c in db.execute(stmt).scalars().all():
         out.setdefault(c.report_id, []).append(c)
     return out
+
+# -------------------------
+# TODOS
+# -------------------------
+def create_todo(
+    db: Session,
+    *,
+    user_id: int,
+    title: str,
+    description: Optional[str] = None,
+    due_date: Optional[date] = None,
+    priority: int = 2,
+) -> Todo:
+    t = Todo(
+        user_id=user_id,
+        title=title.strip(),
+        description=(description or None),
+        due_date=due_date,
+        priority=priority,
+        is_done=False,
+    )
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return t
+
+def list_todos_for_user(
+    db: Session,
+    *,
+    user_id: int,
+    show_done: Optional[bool] = None,
+    search: Optional[str] = None,
+    only_overdue: bool = False,
+) -> List[Todo]:
+    stmt = select(Todo).where(Todo.user_id == user_id)
+    if show_done is not None:
+        stmt = stmt.where(Todo.is_done.is_(show_done))
+    if search:
+        like = f"%{search.strip()}%"
+        stmt = stmt.where(or_(Todo.title.ilike(like), Todo.description.ilike(like)))
+    if only_overdue:
+        stmt = stmt.where(and_(Todo.due_date.is_not(None), Todo.due_date < func.date("now")))
+    # Sıralama: tamamlanmamışlar önce, sonra en yakın tarih, sonra öncelik, sonra en yeni
+    stmt = stmt.order_by(Todo.is_done.asc(), Todo.due_date.is_(None).asc(), Todo.due_date.asc(), Todo.priority.desc(), Todo.created_at.desc())
+    return list(db.execute(stmt).scalars().all())
+
+def update_todo(
+    db: Session,
+    *,
+    todo_id: int,
+    user_id: int,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    due_date: Optional[date] = None,
+    priority: Optional[int] = None,
+) -> Optional[Todo]:
+    t = db.get(Todo, todo_id)
+    if not t or t.user_id != user_id:
+        return None
+    if title is not None:
+        t.title = title.strip() or t.title
+    if description is not None:
+        t.description = (description or None)
+    if due_date is not None or due_date is None:
+        t.due_date = due_date
+    if priority is not None:
+        t.priority = priority
+    t.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(t)
+    return t
+
+def toggle_todo_done(db: Session, *, todo_id: int, user_id: int, done: bool) -> Optional[Todo]:
+    t = db.get(Todo, todo_id)
+    if not t or t.user_id != user_id:
+        return None
+    t.is_done = bool(done)
+    t.completed_at = datetime.utcnow() if done else None
+    t.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(t)
+    return t
+
+def delete_todo(db: Session, *, todo_id: int, user_id: int) -> bool:
+    t = db.get(Todo, todo_id)
+    if not t or t.user_id != user_id:
+        return False
+    db.delete(t)
+    db.commit()
+    return True
