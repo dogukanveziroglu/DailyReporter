@@ -1,21 +1,27 @@
 from __future__ import annotations
 import streamlit as st
+
 from app.db.seed import create_tables, ensure_admin, ensure_dirs
 from app.db.database import SessionLocal
 from app.db.repository import authenticate_user, get_user_by_username, change_password
 from app.core.rbac import role_weight, ROLE_USER, ROLE_ADMIN
 from app.utils.dates import today_tr
-from app.ui.nav import build_sidebar  # ← YENİ
+from app.ui.nav import build_sidebar
+from app.db.migrations import safe_run_migrations  # ← Tek seferlik migration
 
 st.set_page_config(
     page_title="Günlük Raporlama",
     page_icon="📝",
     layout="centered",
-    initial_sidebar_state="expanded",  # ← Sidebar başta açık
+    initial_sidebar_state="expanded",
 )
 
-# DB/dirs
-create_tables(); ensure_dirs(); ensure_admin()
+# ---- Veritabanı / dizinler / seed ve tek seferlik migration ----
+create_tables()
+ensure_dirs()
+ensure_admin()
+safe_run_migrations()
+
 
 def login_form():
     st.header("🔐 Giriş Yap")
@@ -25,21 +31,25 @@ def login_form():
         ok = st.form_submit_button("Giriş")
     if ok:
         if not username or not password:
-            st.error("Kullanıcı adı ve şifre gerekli."); return
+            st.error("Kullanıcı adı ve şifre gerekli.")
+            return
         db = SessionLocal()
         try:
             user = authenticate_user(db, username=username, password=password)
         finally:
             db.close()
         if not user:
-            st.error("Hatalı bilgiler."); return
+            st.error("Hatalı bilgiler.")
+            return
         st.session_state["auth"] = {
             "user_id": user.id,
             "username": user.username,
             "role": user.role,
             "full_name": user.full_name or user.username,
         }
-        st.success("Giriş başarılı."); st.rerun()
+        st.success("Giriş başarılı.")
+        st.rerun()
+
 
 def home():
     auth = st.session_state["auth"]
@@ -63,15 +73,22 @@ def home():
             else:
                 db = SessionLocal()
                 try:
-                    changed = change_password(db, user_id=auth["user_id"], old_password=old, new_password=new1)
+                    changed = change_password(
+                        db, user_id=auth["user_id"], old_password=old, new_password=new1
+                    )
                 finally:
                     db.close()
-                st.success("Şifreniz güncellendi ✔" if changed else "Mevcut şifre yanlış.")
+                if changed:
+                    st.success("Şifreniz güncellendi ✔")
+                else:
+                    st.error("Mevcut şifre yanlış.")
 
     st.info("Soldaki menüden sayfalara geçebilirsiniz.")
 
+
 def main():
-    build_sidebar()  # ← HER SAYFADA çağıracağız
+    # Yan menü (rol bazlı görünürlük, nav.py içinde)
+    build_sidebar()
 
     if "auth" not in st.session_state:
         login_form()
@@ -81,12 +98,14 @@ def main():
         try:
             u = get_user_by_username(db, st.session_state["auth"]["username"])
             if not u:
-                st.error("Kullanıcı bulunamadı."); st.stop()
+                st.error("Kullanıcı bulunamadı.")
+                st.stop()
             st.session_state["auth"]["role"] = u.role
             st.session_state["auth"]["full_name"] = u.full_name or u.username
         finally:
             db.close()
         home()
+
 
 if __name__ == "__main__":
     main()

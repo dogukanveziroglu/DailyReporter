@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from datetime import date, datetime
 import json
 
@@ -288,36 +288,67 @@ def missing_reports_for_date(db: Session, *, user_ids: List[int], d: date) -> Li
     return [db.get(User, uid) for uid in user_ids if uid not in reported_user_ids]
 
 # -------------------------
-# COMMENTS
+# COMMENTS (yorum & yanıt)
 # -------------------------
-def add_comment(db: Session, *, report_id: int, author_user_id: int, content: str) -> Comment:
-    c = Comment(report_id=report_id, author_user_id=author_user_id, content=content.strip())
+def add_comment(
+    db: Session,
+    *,
+    report_id: int,
+    author_user_id: int,
+    content: str,
+    parent_comment_id: Optional[int] = None,
+) -> Comment:
+    c = Comment(
+        report_id=report_id,
+        author_user_id=author_user_id,
+        content=content.strip(),
+        parent_comment_id=parent_comment_id,
+    )
     db.add(c)
     db.commit()
     db.refresh(c)
     return c
 
-def list_comments_for_report(db: Session, *, report_id: int) -> List[Comment]:
-    stmt = (
-        select(Comment)
-        .options(selectinload(Comment.author))
-        .where(Comment.report_id == report_id)
-        .order_by(Comment.created_at.asc(), Comment.id.asc())
-    )
-    return list(db.execute(stmt).scalars().all())
-
-def list_comments_by_report_ids(db: Session, *, report_ids: List[int]) -> Dict[int, List[Comment]]:
+def list_comments_tree_by_report_ids(
+    db: Session, *, report_ids: List[int]
+) -> Dict[int, List[Tuple[Comment, int]]]:
+    """Her rapor için (yorum, depth) listesi döner (depth = iç içe seviye)."""
     if not report_ids:
         return {}
     stmt = (
         select(Comment)
         .options(selectinload(Comment.author))
         .where(Comment.report_id.in_(report_ids))
-        .order_by(Comment.report_id.asc(), Comment.created_at.asc(), Comment.id.asc())
+        .order_by(Comment.created_at.asc(), Comment.id.asc())
     )
-    out: Dict[int, List[Comment]] = {}
-    for c in db.execute(stmt).scalars().all():
-        out.setdefault(c.report_id, []).append(c)
+    all_comments = list(db.execute(stmt).scalars().all())
+
+    # report_id -> [comments]
+    per_report: Dict[int, List[Comment]] = {}
+    for c in all_comments:
+        per_report.setdefault(c.report_id, []).append(c)
+
+    # Her rapor için ağaç oluştur
+    out: Dict[int, List[Tuple[Comment, int]]] = {}
+    for rid, arr in per_report.items():
+        children: Dict[Optional[int], List[Comment]] = {}
+        for c in arr:
+            children.setdefault(c.parent_comment_id, []).append(c)
+
+        # her seviyede kronolojik sırayı koru
+        for k in children:
+            children[k].sort(key=lambda x: (x.created_at, x.id))
+
+        ordered: List[Tuple[Comment, int]] = []
+
+        def walk(parent_id: Optional[int], depth: int):
+            for c in children.get(parent_id, []):
+                ordered.append((c, depth))
+                walk(c.id, depth + 1)
+
+        walk(None, 0)
+        out[rid] = ordered
+
     return out
 
 # -------------------------
@@ -361,8 +392,10 @@ def list_todos_for_user(
         stmt = stmt.where(or_(Todo.title.ilike(like), Todo.description.ilike(like)))
     if only_overdue:
         stmt = stmt.where(and_(Todo.due_date.is_not(None), Todo.due_date < func.date("now")))
-    # Sıralama: tamamlanmamışlar önce, sonra en yakın tarih, sonra öncelik, sonra en yeni
-    stmt = stmt.order_by(Todo.is_done.asc(), Todo.due_date.is_(None).asc(), Todo.due_date.asc(), Todo.priority.desc(), Todo.created_at.desc())
+    stmt = stmt.order_by(
+        Todo.is_done.asc(), Todo.due_date.is_(None).asc(), Todo.due_date.asc(),
+        Todo.priority.desc(), Todo.created_at.desc()
+    )
     return list(db.execute(stmt).scalars().all())
 
 def update_todo(

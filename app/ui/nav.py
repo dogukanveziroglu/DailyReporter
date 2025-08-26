@@ -15,7 +15,7 @@ def build_sidebar():
 
     if role_weight(role) >= role_weight(ROLE_ADMIN):
         st.sidebar.markdown("---")
-        st.sidebar.page_link("pages/06_Rapor_Yorumlari.py", label="🗨️ Rapor Yorumları (Admin)")
+        st.sidebar.page_link("pages/06_Rapor_Yorumlari.py", label="🗨️ Rapor Yorumları")
         st.sidebar.page_link("pages/05_Raporlama_Istatistik.py", label="📊 Raporlama & İstatistik")
         st.sidebar.page_link("pages/04_Yonetim.py", label="🛠️ Yönetim")
 
