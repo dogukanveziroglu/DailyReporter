@@ -1,12 +1,26 @@
 from __future__ import annotations
+
 from datetime import datetime, date
 from typing import Optional, List
 
+from sqlalchemy import (
+    Integer,
+    String,
+    Text,
+    DateTime,
+    Date,
+    Boolean,
+    ForeignKey,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import Integer, String, Text, DateTime, Date, ForeignKey, Boolean
 
 from app.db.database import Base
 
+
+# ---------------------------
+# Department / Team / User
+# ---------------------------
 
 class Department(Base):
     __tablename__ = "departments"
@@ -29,6 +43,7 @@ class Team(Base):
     department_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
     )
+    # Opsiyonel: bir “atanmış lider” alanı. (Görsel/dekoratif; yetkiyi kullanıcı rolü belirler.)
     lead_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -36,19 +51,14 @@ class Team(Base):
 
     department: Mapped[Optional["Department"]] = relationship("Department", back_populates="teams")
 
-    # Ambiguity fix: sadece User.team_id üzerinden bağlan
+    # Ambiguity fix: User.team_id üzerinden bağla
     users: Mapped[List["User"]] = relationship(
-        "User",
-        back_populates="team",
-        foreign_keys="User.team_id",
+        "User", back_populates="team", foreign_keys="User.team_id"
     )
 
-    # Opsiyonel: takım lideri nesnesi
+    # Opsiyonel: takım lideri nesnesi (viewonly)
     lead: Mapped[Optional["User"]] = relationship(
-        "User",
-        foreign_keys=[lead_user_id],
-        uselist=False,
-        viewonly=True,
+        "User", foreign_keys=[lead_user_id], uselist=False, viewonly=True
     )
 
 
@@ -72,11 +82,9 @@ class User(Base):
 
     department: Mapped[Optional["Department"]] = relationship("Department", back_populates="users")
 
-    # Ambiguity fix
+    # Ambiguity fix: foreign_keys veriyoruz
     team: Mapped[Optional["Team"]] = relationship(
-        "Team",
-        back_populates="users",
-        foreign_keys=[team_id],
+        "Team", back_populates="users", foreign_keys=[team_id]
     )
 
     reports: Mapped[List["Report"]] = relationship(
@@ -87,18 +95,28 @@ class User(Base):
         "Todo", back_populates="user", cascade="all, delete-orphan"
     )
 
+    leaves: Mapped[List["Leave"]] = relationship(
+        "Leave", back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+# ---------------------------
+# Report / Comment (threaded)
+# ---------------------------
 
 class Report(Base):
     __tablename__ = "reports"
+    __table_args__ = (
+        UniqueConstraint("user_id", "date", name="uq_report_user_date"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     project: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     tags_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
@@ -114,43 +132,37 @@ class Comment(Base):
     __tablename__ = "comments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    report_id: Mapped[int] = mapped_column(
-        ForeignKey("reports.id", ondelete="CASCADE"), index=True, nullable=False
-    )
-    author_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=False
-    )
-    # YENİ: cevaplar için ebeveyn yorum
+    report_id: Mapped[int] = mapped_column(ForeignKey("reports.id", ondelete="CASCADE"), index=True, nullable=False)
+    author_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
+
+    # Yanıtlar için self-FK
     parent_comment_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("comments.id", ondelete="CASCADE"), nullable=True, index=True
     )
+
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     report: Mapped["Report"] = relationship("Report", back_populates="comments")
     author: Mapped["User"] = relationship("User")
 
-    # Self-referential ilişki
     parent: Mapped[Optional["Comment"]] = relationship(
-        "Comment",
-        remote_side="Comment.id",
-        back_populates="replies",
+        "Comment", remote_side="Comment.id", back_populates="replies"
     )
     replies: Mapped[List["Comment"]] = relationship(
-        "Comment",
-        back_populates="parent",
-        cascade="all, delete-orphan",
-        single_parent=True,
+        "Comment", back_populates="parent", cascade="all, delete-orphan", single_parent=True
     )
 
+
+# ---------------------------
+# Todo
+# ---------------------------
 
 class Todo(Base):
     __tablename__ = "todos"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -161,3 +173,22 @@ class Todo(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="todos")
+
+
+# ---------------------------
+# Leave (İzin)
+# ---------------------------
+
+class Leave(Base):
+    __tablename__ = "leaves"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    user: Mapped["User"] = relationship("User", back_populates="leaves")

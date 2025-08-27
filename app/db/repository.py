@@ -1,21 +1,33 @@
 from __future__ import annotations
-from typing import Optional, List, Dict, Tuple
-from datetime import date, datetime
+
 import json
+from datetime import date, datetime
+from typing import Optional, List, Dict, Tuple
 
 from sqlalchemy import select, or_, and_, func
-from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, selectinload
 
-from app.db.models import User, Report, Department, Team, Comment, Todo
+from app.db.models import (
+    User,
+    Department,
+    Team,
+    Report,
+    Comment,
+    Todo,
+    Leave,
+)
 from app.core.security import hash_password, verify_password
 from app.core.rbac import ROLE_LEAD
 
-# -------------------------
+
+# --------------------------------
 # USERS
-# -------------------------
+# --------------------------------
+
 def get_user(db: Session, user_id: int) -> Optional[User]:
     return db.get(User, user_id)
+
 
 def get_user_by_username(db: Session, username: str) -> Optional[User]:
     stmt = (
@@ -27,6 +39,7 @@ def get_user_by_username(db: Session, username: str) -> Optional[User]:
         .where(User.username == username)
     )
     return db.execute(stmt).scalar_one_or_none()
+
 
 def create_user(
     db: Session,
@@ -51,12 +64,14 @@ def create_user(
     db.refresh(u)
     return u
 
-def reset_password_for_user(db: Session, *, user_id: int, new_password: str):
+
+def reset_password_for_user(db: Session, *, user_id: int, new_password: str) -> None:
     u = db.get(User, user_id)
     if not u:
         raise ValueError("User not found")
     u.password_hash = hash_password(new_password)
     db.commit()
+
 
 def change_password(db: Session, *, user_id: int, old_password: str, new_password: str) -> bool:
     u = db.get(User, user_id)
@@ -68,9 +83,15 @@ def change_password(db: Session, *, user_id: int, old_password: str, new_passwor
     db.commit()
     return True
 
+
 def update_user_role_team_dept(
-    db: Session, *, user_id: int, role: str, department_id: Optional[int], team_id: Optional[int]
-):
+    db: Session,
+    *,
+    user_id: int,
+    role: str,
+    department_id: Optional[int],
+    team_id: Optional[int],
+) -> None:
     u = db.get(User, user_id)
     if not u:
         raise ValueError("User not found")
@@ -79,15 +100,17 @@ def update_user_role_team_dept(
     u.team_id = team_id
     db.commit()
 
-def delete_user(db: Session, *, user_id: int):
+
+def delete_user(db: Session, *, user_id: int) -> None:
     u = db.get(User, user_id)
     if not u:
         raise ValueError("User not found")
-    teams = list(db.execute(select(Team).where(Team.lead_user_id == user_id)).scalars())
-    for t in teams:
+    # Eğer bu kullanıcı takım lideri atanmışsa temizle
+    for t in db.execute(select(Team).where(Team.lead_user_id == user_id)).scalars():
         t.lead_user_id = None
     db.delete(u)
     db.commit()
+
 
 def authenticate_user(db: Session, *, username: str, password: str) -> Optional[User]:
     u = get_user_by_username(db, username)
@@ -95,28 +118,25 @@ def authenticate_user(db: Session, *, username: str, password: str) -> Optional[
         return None
     return u if verify_password(password, u.password_hash) else None
 
+
 def list_users_simple(db: Session) -> List[User]:
     stmt = (
         select(User)
-        .options(
-            selectinload(User.department),
-            selectinload(User.team),
-        )
+        .options(selectinload(User.department), selectinload(User.team))
         .order_by(User.id)
     )
     return list(db.execute(stmt).scalars().all())
 
+
 def list_users_by_team(db: Session, *, team_id: int) -> List[User]:
     stmt = (
         select(User)
-        .options(
-            selectinload(User.department),
-            selectinload(User.team),
-        )
+        .options(selectinload(User.department), selectinload(User.team))
         .where(User.team_id == team_id)
         .order_by(User.full_name, User.username)
     )
     return list(db.execute(stmt).scalars().all())
+
 
 def list_team_leads_by_team(db: Session, *, team_id: int) -> List[User]:
     stmt = (
@@ -126,12 +146,14 @@ def list_team_leads_by_team(db: Session, *, team_id: int) -> List[User]:
     )
     return list(db.execute(stmt).scalars().all())
 
-# -------------------------
+
+# --------------------------------
 # DEPARTMENTS & TEAMS
-# -------------------------
+# --------------------------------
+
 def list_departments(db: Session) -> List[Department]:
-    stmt = select(Department).order_by(Department.name)
-    return list(db.execute(stmt).scalars().all())
+    return list(db.execute(select(Department).order_by(Department.name)).scalars().all())
+
 
 def create_department(db: Session, *, name: str) -> Department:
     d = Department(name=name)
@@ -140,13 +162,11 @@ def create_department(db: Session, *, name: str) -> Department:
     db.refresh(d)
     return d
 
+
 def list_teams(db: Session) -> List[Team]:
-    stmt = (
-        select(Team)
-        .options(selectinload(Team.department))
-        .order_by(Team.name)
-    )
+    stmt = select(Team).options(selectinload(Team.department)).order_by(Team.name)
     return list(db.execute(stmt).scalars().all())
+
 
 def list_teams_for_lead(
     db: Session, *, lead_user_id: Optional[int], include_all: bool = False
@@ -161,6 +181,7 @@ def list_teams_for_lead(
     stmt = select(Team).options(selectinload(Team.department)).where(Team.id == u.team_id)
     return list(db.execute(stmt).scalars().all())
 
+
 def create_team(
     db: Session, *, name: str, department_id: Optional[int], lead_user_id: Optional[int] = None
 ) -> Team:
@@ -170,12 +191,15 @@ def create_team(
     db.refresh(t)
     return t
 
-# -------------------------
+
+# --------------------------------
 # REPORTS
-# -------------------------
+# --------------------------------
+
 def get_report(db: Session, *, user_id: int, d: date) -> Optional[Report]:
     stmt = select(Report).where(Report.user_id == user_id, Report.date == d)
     return db.execute(stmt).scalar_one_or_none()
+
 
 def upsert_report(
     db: Session,
@@ -186,6 +210,7 @@ def upsert_report(
     project: Optional[str],
     tags_json: Optional[str],
 ) -> Report:
+    """Mevcut rapor varsa günceller; yoksa ekler."""
     r = get_report(db, user_id=user_id, d=d)
     if r:
         r.content = content
@@ -195,13 +220,12 @@ def upsert_report(
         db.commit()
         db.refresh(r)
         return r
-    r = Report(
-        user_id=user_id, date=d, content=content, project=project, tags_json=tags_json
-    )
+    r = Report(user_id=user_id, date=d, content=content, project=project, tags_json=tags_json)
     db.add(r)
     db.commit()
     db.refresh(r)
     return r
+
 
 def create_report_revision(
     db: Session,
@@ -212,8 +236,9 @@ def create_report_revision(
     project: Optional[str],
     edited_at_iso: str,
 ) -> Report:
-    """İdeal: aynı gün için YENİ satır.
-    Eğer DB'de (user_id, date) UNIQUE varsa, geçici olarak mevcut satırı günceller."""
+    """
+    İdeal: yeni kayıt. Unique ihlali olursa var olan kaydı günceller ve 'edited' etiketler.
+    """
     tags = {"edited": True, "edited_at": edited_at_iso}
     r = Report(
         user_id=user_id,
@@ -229,7 +254,8 @@ def create_report_revision(
         return r
     except IntegrityError as e:
         db.rollback()
-        if "reports.user_id, reports.date" in str(e):
+        # (user_id, date) UNIQUE ise, mevcut kaydı güncelle
+        if "uq_report_user_date" in str(e) or "reports.user_id, reports.date" in str(e):
             existing = get_report(db, user_id=user_id, d=d)
             if existing:
                 try:
@@ -249,6 +275,7 @@ def create_report_revision(
                 return existing
         raise
 
+
 def list_user_reports(
     db: Session, *, user_id: int, start: date, end: date, q: Optional[str]
 ) -> List[Report]:
@@ -261,6 +288,7 @@ def list_user_reports(
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(Report.content.ilike(like), Report.project.ilike(like)))
     return list(db.execute(stmt).scalars().all())
+
 
 def list_reports_for_users(
     db: Session, *, user_ids: List[int], start: date, end: date, q: Optional[str]
@@ -277,19 +305,20 @@ def list_reports_for_users(
         stmt = stmt.where(or_(Report.content.ilike(like), Report.project.ilike(like)))
     return list(db.execute(stmt).scalars().all())
 
+
 def missing_reports_for_date(db: Session, *, user_ids: List[int], d: date) -> List[User]:
     if not user_ids:
         return []
     reported_user_ids = set(
-        db.execute(select(Report.user_id).where(Report.user_id.in_(user_ids), Report.date == d))
-        .scalars()
-        .all()
+        db.execute(select(Report.user_id).where(Report.user_id.in_(user_ids), Report.date == d)).scalars()
     )
     return [db.get(User, uid) for uid in user_ids if uid not in reported_user_ids]
 
-# -------------------------
-# COMMENTS (yorum & yanıt)
-# -------------------------
+
+# --------------------------------
+# COMMENTS (threaded)
+# --------------------------------
+
 def add_comment(
     db: Session,
     *,
@@ -301,7 +330,7 @@ def add_comment(
     c = Comment(
         report_id=report_id,
         author_user_id=author_user_id,
-        content=content.strip(),
+        content=(content or "").strip(),
         parent_comment_id=parent_comment_id,
     )
     db.add(c)
@@ -309,10 +338,13 @@ def add_comment(
     db.refresh(c)
     return c
 
+
 def list_comments_tree_by_report_ids(
     db: Session, *, report_ids: List[int]
 ) -> Dict[int, List[Tuple[Comment, int]]]:
-    """Her rapor için (yorum, depth) listesi döner (depth = iç içe seviye)."""
+    """
+    Her rapor için [(comment, depth), ...] döndürür.
+    """
     if not report_ids:
         return {}
     stmt = (
@@ -323,19 +355,17 @@ def list_comments_tree_by_report_ids(
     )
     all_comments = list(db.execute(stmt).scalars().all())
 
-    # report_id -> [comments]
     per_report: Dict[int, List[Comment]] = {}
     for c in all_comments:
         per_report.setdefault(c.report_id, []).append(c)
 
-    # Her rapor için ağaç oluştur
     out: Dict[int, List[Tuple[Comment, int]]] = {}
+
     for rid, arr in per_report.items():
         children: Dict[Optional[int], List[Comment]] = {}
         for c in arr:
             children.setdefault(c.parent_comment_id, []).append(c)
-
-        # her seviyede kronolojik sırayı koru
+        # kronolojik sırayı koru
         for k in children:
             children[k].sort(key=lambda x: (x.created_at, x.id))
 
@@ -351,9 +381,11 @@ def list_comments_tree_by_report_ids(
 
     return out
 
-# -------------------------
+
+# --------------------------------
 # TODOS
-# -------------------------
+# --------------------------------
+
 def create_todo(
     db: Session,
     *,
@@ -365,16 +397,16 @@ def create_todo(
 ) -> Todo:
     t = Todo(
         user_id=user_id,
-        title=title.strip(),
+        title=(title or "").strip(),
         description=(description or None),
         due_date=due_date,
         priority=priority,
-        is_done=False,
     )
     db.add(t)
     db.commit()
     db.refresh(t)
     return t
+
 
 def list_todos_for_user(
     db: Session,
@@ -393,10 +425,14 @@ def list_todos_for_user(
     if only_overdue:
         stmt = stmt.where(and_(Todo.due_date.is_not(None), Todo.due_date < func.date("now")))
     stmt = stmt.order_by(
-        Todo.is_done.asc(), Todo.due_date.is_(None).asc(), Todo.due_date.asc(),
-        Todo.priority.desc(), Todo.created_at.desc()
+        Todo.is_done.asc(),
+        Todo.due_date.is_(None).asc(),
+        Todo.due_date.asc(),
+        Todo.priority.desc(),
+        Todo.created_at.desc(),
     )
     return list(db.execute(stmt).scalars().all())
+
 
 def update_todo(
     db: Session,
@@ -415,6 +451,7 @@ def update_todo(
         t.title = title.strip() or t.title
     if description is not None:
         t.description = (description or None)
+    # due_date None atanabilsin diye koşulsuz set edelim
     if due_date is not None or due_date is None:
         t.due_date = due_date
     if priority is not None:
@@ -423,6 +460,7 @@ def update_todo(
     db.commit()
     db.refresh(t)
     return t
+
 
 def toggle_todo_done(db: Session, *, todo_id: int, user_id: int, done: bool) -> Optional[Todo]:
     t = db.get(Todo, todo_id)
@@ -435,10 +473,85 @@ def toggle_todo_done(db: Session, *, todo_id: int, user_id: int, done: bool) -> 
     db.refresh(t)
     return t
 
+
 def delete_todo(db: Session, *, todo_id: int, user_id: int) -> bool:
     t = db.get(Todo, todo_id)
     if not t or t.user_id != user_id:
         return False
     db.delete(t)
+    db.commit()
+    return True
+
+
+# --------------------------------
+# LEAVES (İzin)
+# --------------------------------
+
+def create_leave(
+    db: Session,
+    *,
+    user_id: int,
+    start_date: date,
+    end_date: date,
+    reason: Optional[str],
+) -> Leave:
+    if start_date > end_date:
+        raise ValueError("Başlangıç tarihi bitişten büyük olamaz")
+    lv = Leave(
+        user_id=user_id,
+        start_date=start_date,
+        end_date=end_date,
+        reason=(reason or None),
+    )
+    db.add(lv)
+    db.commit()
+    db.refresh(lv)
+    return lv
+
+
+def list_leaves_for_user(
+    db: Session,
+    *,
+    user_id: int,
+    start: Optional[date] = None,
+    end: Optional[date] = None,
+) -> List[Leave]:
+    stmt = select(Leave).where(Leave.user_id == user_id)
+    if start:
+        stmt = stmt.where(Leave.end_date >= start)
+    if end:
+        stmt = stmt.where(Leave.start_date <= end)
+    stmt = stmt.order_by(Leave.start_date.desc(), Leave.id.desc())
+    return list(db.execute(stmt).scalars().all())
+
+
+def list_leaves_admin(
+    db: Session,
+    *,
+    start: Optional[date] = None,
+    end: Optional[date] = None,
+    department_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+) -> List[Leave]:
+    stmt = select(Leave).options(selectinload(Leave.user).selectinload(User.department))
+    if start:
+        stmt = stmt.where(Leave.end_date >= start)
+    if end:
+        stmt = stmt.where(Leave.start_date <= end)
+    if user_id:
+        stmt = stmt.where(Leave.user_id == user_id)
+    if department_id:
+        stmt = stmt.join(User).where(User.department_id == department_id)
+    stmt = stmt.order_by(Leave.start_date.desc(), Leave.id.desc())
+    return list(db.execute(stmt).scalars().all())
+
+
+def delete_leave(db: Session, *, leave_id: int, user_id: Optional[int] = None, as_admin: bool = False) -> bool:
+    lv = db.get(Leave, leave_id)
+    if not lv:
+        return False
+    if not as_admin and (user_id is None or lv.user_id != user_id):
+        return False
+    db.delete(lv)
     db.commit()
     return True
