@@ -14,5 +14,5 @@ def ensure_admin():
     try:
         if not get_user_by_username(db, ADMIN_USERNAME):
             create_user(db, username=ADMIN_USERNAME, password=ADMIN_PASSWORD, full_name="Admin", role="admin",
-                        department_id=None, team_id=None)
+                        team_id=None)
     finally: db.close()

@@ -5,318 +5,212 @@ from sqlalchemy.exc import IntegrityError
 from app.core.rbac import require_min_role, ROLE_ADMIN
 from app.db.database import SessionLocal
 from app.db.repository import (
+    # Departmanlar
     list_departments, create_department,
-    list_teams, create_team, list_team_leads_by_team,
-    list_users_simple, list_users_by_team, create_user,
-    update_user_role_team_dept, reset_password_for_user, delete_user
+    # Takımlar
+    list_teams, create_team,
+    # Kullanıcılar
+    list_users_simple, create_user, delete_user,
+    update_user_role_team, set_user_departments, reset_password_for_user,
 )
-from app.utils.text import make_username
 from app.ui.nav import build_sidebar
+from app.utils.text import make_username
 
 st.set_page_config(page_title="Yönetim", page_icon="🛠️", initial_sidebar_state="expanded")
 build_sidebar()
 
-def _user_label(u) -> str:
-    return f"{u.full_name or u.username}  •  @{u.username}  •  #{u.id}  •  {u.role}"
+ROLES = ["user", "lead", "dept_lead", "admin"]  # ← dept_lead eklendi
 
 @require_min_role(ROLE_ADMIN)
 def page():
     st.title("🛠️ Yönetim")
 
-    # ---------------------------
-    # DEPARTMANLAR
-    # ---------------------------
-    st.header("Departmanlar")
-    db = SessionLocal()
-    try:
-        deps = list_departments(db)
-    finally:
-        db.close()
-
-    if deps:
-        st.table([{"ID": d.id, "Ad": d.name} for d in deps])
-
-    with st.form("dep_new"):
-        dn = st.text_input("Yeni departman adı")
-        ok = st.form_submit_button("Ekle")
-
-    if ok:
-        name = (dn or "").strip()
-        if not name:
-            st.error("Departman adı boş olamaz.")
-        else:
-            if any((d.name or "").strip().lower() == name.lower() for d in deps):
-                st.warning(f"“{name}” adında bir departman zaten var.")
-            else:
-                db = SessionLocal()
-                try:
-                    create_department(db, name=name)
-                    st.success("Departman eklendi.")
-                    st.rerun()
-                except IntegrityError:
-                    st.error(f"“{name}” adına sahip departman zaten mevcut.")
-                except Exception as e:
-                    st.error(f"Departman eklenemedi: {e}")
-                finally:
-                    db.close()
-
-    st.divider()
-
-    # ---------------------------
-    # TAKIMLAR
-    # ---------------------------
-    st.header("Takımlar")
+    # --- Ortak veriler
     db = SessionLocal()
     try:
         deps = list_departments(db)
         teams = list_teams(db)
-    finally:
-        db.close()
-
-    if teams:
-        rows = []
-        db = SessionLocal()
-        try:
-            for t in teams:
-                leads = list_team_leads_by_team(db, team_id=t.id)
-                rows.append({
-                    "ID": t.id,
-                    "Ad": t.name,
-                    "Departman": (t.department.name if t.department else "-"),
-                    "Lider Sayısı": len(leads),
-                })
-        finally:
-            db.close()
-        st.table(rows)
-
-    with st.form("team_new"):
-        name = st.text_input("Takım adı")
-        dep_id = st.selectbox(
-            "Departman",
-            options=[None] + [d.id for d in deps],
-            format_func=lambda i: "-" if i is None else next(d.name for d in deps if d.id == i)
-        )
-        ok_team = st.form_submit_button("Takım Ekle")
-
-    if ok_team:
-        tname = (name or "").strip()
-        if not tname:
-            st.error("Takım adı boş olamaz.")
-        else:
-            if any(
-                ((t.name or "").strip().lower() == tname.lower()) and (t.department.id if t.department else None) == dep_id
-                for t in teams
-            ):
-                st.warning(f"Bu departmanda “{tname}” adlı bir takım zaten var.")
-            else:
-                db = SessionLocal()
-                try:
-                    create_team(db, name=tname, department_id=dep_id, lead_user_id=None)
-                    st.success("Takım eklendi.")
-                    st.rerun()
-                except IntegrityError:
-                    st.error("Takım eklenemedi: isim/bağlılık benzersiz olmalı.")
-                except Exception as e:
-                    st.error(f"Takım eklenemedi: {e}")
-                finally:
-                    db.close()
-
-    st.divider()
-
-    # ---------------------------
-    # KULLANICILAR (Liste + satır içi SİL)
-    # ---------------------------
-    st.header("Kullanıcılar")
-
-    if "del_candidate" not in st.session_state:
-        st.session_state["del_candidate"] = None
-
-    db = SessionLocal()
-    try:
         users = list_users_simple(db)
-        deps = list_departments(db)
-        teams = list_teams(db)
     finally:
         db.close()
 
-    if users:
-        h = st.columns([0.5, 1.0, 1.4, 0.8, 1.0, 1.0, 0.5])
-        h[0].markdown("**ID**")
-        h[1].markdown("**Username**")
-        h[2].markdown("**Ad Soyad**")
-        h[3].markdown("**Rol**")
-        h[4].markdown("**Departman**")
-        h[5].markdown("**Takım**")
-        h[6].markdown("**Sil**")
+    dep_id_to_name = {d.id: d.name for d in deps}
+    team_id_to_name = {t.id: t.name for t in teams}
 
-        for u in users:
-            cols = st.columns([0.5, 1.0, 1.4, 0.8, 1.0, 1.0, 0.5])
-            cols[0].write(u.id)
-            cols[1].write(u.username)
-            cols[2].write(u.full_name or "-")
-            cols[3].write(u.role)
-            cols[4].write(u.department.name if u.department else "-")
-            cols[5].write(u.team.name if u.team else "-")
-            with cols[6]:
-                if st.button("❌ Sil", key=f"delbtn_{u.id}"):
-                    st.session_state["del_candidate"] = u.id
-                    st.rerun()
-    else:
-        st.info("Kayıtlı kullanıcı yok.")
-
-    cand_id = st.session_state.get("del_candidate")
-    if cand_id and users:
-        target = next((x for x in users if x.id == cand_id), None)
-        if target:
-            st.warning(f"Silinecek: **{_user_label(target)}**")
-            confirm_text = st.text_input("Onay için kullanıcı adını yazın", key="confirm_delete_text")
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("Evet, sil"):
-                    me = st.session_state["auth"]["user_id"]
-                    admin_count = sum(1 for u in users if u.role == "admin")
-
-                    if confirm_text.strip() != target.username:
-                        st.error("Onay metni hatalı. Kullanıcının **username** değerini yazmalısınız.")
-                    elif cand_id == me:
-                        st.error("Kendi hesabınızı silemezsiniz.")
-                    elif target.role == "admin" and admin_count <= 1:
-                        st.error("Son admin hesabı silinemez.")
-                    else:
-                        db = SessionLocal()
-                        try:
-                            delete_user(db, user_id=cand_id)
-                            st.success("Kullanıcı silindi.")
-                        except Exception as e:
-                            st.error(f"Kullanıcı silinemedi: {e}")
-                        finally:
-                            db.close()
-                        st.session_state["del_candidate"] = None
-                        st.rerun()
-            with c2:
-                if st.button("Vazgeç"):
-                    st.session_state["del_candidate"] = None
-                    st.rerun()
-
-    st.divider()
-
-    # ---------------------------
-    # YENİ KULLANICI
-    # ---------------------------
-    st.subheader("Yeni Kullanıcı")
-    with st.form("user_new"):
-        full = st.text_input("Ad Soyad")
-        username_preview = make_username(full or "")
-        st.caption(f"Otomatik username: `{username_preview}`")
-        # ↓ BURADA dept_lead eklendi
-        role = st.selectbox("Rol", options=["user", "team_lead", "dept_lead", "admin"])
-        dep_id = st.selectbox(
-            "Departman",
-            options=[None] + [d.id for d in deps],
-            format_func=lambda i: "-" if i is None else next(d.name for d in deps if d.id == i)
-        )
-        team_id = st.selectbox(
-            "Takım",
-            options=[None] + [t.id for t in teams],
-            format_func=lambda i: "-" if i is None else next(t.name for t in teams if t.id == i)
-        )
-        password = st.text_input("Şifre", type="password", value="123456")
-        ok_new = st.form_submit_button("Kullanıcı Oluştur")
-
-    if ok_new:
-        full_clean = (full or "").strip()
-        if not full_clean:
-            st.error("Ad Soyad gerekli.")
-        else:
-            if any(u.username.lower() == username_preview.lower() for u in users):
-                st.warning(f"`{username_preview}` kullanıcı adı zaten kullanılıyor. Ad Soyad'ı değiştirin veya elle düzenleyin.")
+    st.subheader("📁 Departman Yönetimi")
+    c1, c2 = st.columns([2, 3])
+    with c1:
+        with st.form("dep_add_form", clear_on_submit=True):
+            dn = st.text_input("Yeni Departman Adı")
+            ok = st.form_submit_button("Ekle")
+        if ok:
+            if not (dn or "").strip():
+                st.error("Departman adı boş olamaz.")
             else:
                 db = SessionLocal()
                 try:
-                    create_user(
+                    create_department(db, name=dn.strip())
+                    st.success("Departman eklendi.")
+                except IntegrityError:
+                    db.rollback()
+                    st.error("Bu isimde bir departman zaten var.")
+                finally:
+                    db.close()
+                st.rerun()
+    with c2:
+        if deps:
+            st.write("Mevcut Departmanlar:")
+            for d in deps:
+                st.write(f"• {d.name}")
+        else:
+            st.info("Henüz departman yok.")
+
+    st.divider()
+    st.subheader("👥 Kullanıcı Yönetimi")
+
+    tabs = st.tabs(["➕ Kullanıcı Ekle", "✏️ Kullanıcı Güncelle", "🗑️ Kullanıcı Sil", "🔑 Şifre Sıfırla", "📋 Kullanıcı Listesi"])
+
+    # ---------- Kullanıcı Ekle ----------
+    with tabs[0]:
+        st.markdown("Yeni kullanıcı eklerken birden fazla departman seçebilirsiniz.")
+        with st.form("user_add_form", clear_on_submit=True):
+            full = st.text_input("Ad Soyad", placeholder="Örn: İsim Soyisim")
+            username_preview = make_username(full or "")
+            st.caption(f"Önerilen kullanıcı adı: **{username_preview}** (gerekirse değiştirebilirsiniz)")
+            username = st.text_input("Kullanıcı Adı", value=username_preview, help="Girişte kullanılacak, benzersiz olmalı.")
+            pwd = st.text_input("Geçici Şifre", type="password")
+            role = st.selectbox("Rol", options=ROLES, index=0)  # ← burada da dept_lead var
+            # çoklu departman seçimi
+            dep_ids = st.multiselect(
+                "Departmanlar",
+                options=[d.id for d in deps],
+                format_func=lambda i: dep_id_to_name.get(i, f"#{i}")
+            )
+            team_opt = ["(yok)"] + [t.name for t in teams]
+            team_choice = st.selectbox("Takım (opsiyonel)", options=team_opt, index=0)
+            ok = st.form_submit_button("Ekle")
+
+        if ok:
+            if not username or not pwd:
+                st.error("Kullanıcı adı ve şifre gerekli.")
+            else:
+                db = SessionLocal()
+                try:
+                    team_id = None if team_choice == "(yok)" else next((t.id for t in teams if t.name == team_choice), None)
+                    u = create_user(
                         db,
-                        username=username_preview,
-                        password=password or "123456",
-                        full_name=full_clean,
+                        username=username.strip(),
+                        password=pwd,
+                        full_name=(full or "").strip() or None,
                         role=role,
-                        department_id=dep_id,
+                        department_ids=dep_ids,
                         team_id=team_id,
                     )
-                    st.success(f"Kullanıcı oluşturuldu: {username_preview}")
-                    st.rerun()
-                except IntegrityError:
-                    st.error("Kullanıcı oluşturulamadı: username benzersiz olmalı.")
-                except Exception as e:
-                    st.error(f"Kullanıcı oluşturulamadı: {e}")
+                    st.success(f"Kullanıcı oluşturuldu: **{u.full_name or u.username}**")
+                except IntegrityError as e:
+                    db.rollback()
+                    if "UNIQUE constraint failed: users.username" in str(e):
+                        st.error("Bu kullanıcı adı zaten kullanımda.")
+                    else:
+                        st.error("Kullanıcı oluşturulamadı.")
                 finally:
                     db.close()
+                st.rerun()
 
-    # ---------------------------
-    # KULLANICI GÜNCELLE / ROL ATAMA (dropdown)
-    # ---------------------------
-    st.subheader("Kullanıcı Güncelle / Rol Atama")
-    if not users:
-        st.info("Önce kullanıcı oluşturun.")
-    else:
-        user_map = {u.id: _user_label(u) for u in users}
-        selected_uid = st.selectbox(
-            "Kullanıcı",
-            options=list(user_map.keys()),
-            format_func=lambda i: user_map[i],
-            key="edit_user_select",
-        )
-        # ↓ BURADA dept_lead eklendi
-        role = st.selectbox("Yeni Rol", options=["user", "team_lead", "dept_lead", "admin"])
-        dep_id = st.selectbox(
-            "Yeni Departman",
-            options=[None] + [d.id for d in deps],
-            format_func=lambda i: "-" if i is None else next(d.name for d in deps if d.id == i),
-            key="dep2"
-        )
-        team_id = st.selectbox(
-            "Yeni Takım",
-            options=[None] + [t.id for t in teams],
-            format_func=lambda i: "-" if i is None else next(t.name for t in teams if t.id == i),
-            key="team2"
-        )
-        if st.button("Güncelle"):
-            db = SessionLocal()
+    # ---------- Kullanıcı Güncelle ----------
+    with tabs[1]:
+        if not users:
+            st.info("Güncellenecek kullanıcı yok.")
+        else:
+            # kullanıcı seç
+            u_opts = {f"{(u.full_name or u.username)} (@{u.username})": u.id for u in users}
+            sel_label = st.selectbox("Kullanıcı", options=list(u_opts.keys()))
+            sel_uid = u_opts[sel_label]
+            sel_user = next(u for u in users if u.id == sel_uid)
+
+            st.caption(f"Seçili kullanıcı: **{sel_user.full_name or sel_user.username}**  | Rol: **{sel_user.role}**")
+
+            # rol (güvenli index)
             try:
-                update_user_role_team_dept(db, user_id=selected_uid, role=role, department_id=dep_id, team_id=team_id)
-                st.success("Güncellendi.")
-            except Exception as e:
-                st.error(f"Güncellenemedi: {e}")
-            finally:
-                db.close()
-            st.rerun()
+                role_index = ROLES.index(sel_user.role)
+            except ValueError:
+                role_index = 0  # bilinmeyen bir rol gelirse 'user' göster
+            new_role = st.selectbox("Rol", options=ROLES, index=role_index)
 
-    # ---------------------------
-    # PAROLA SIFIRLAMA (dropdown)
-    # ---------------------------
-    st.subheader("Parola Sıfırlama")
-    if not users:
-        st.info("Önce kullanıcı oluşturun.")
-    else:
-        user_map2 = {u.id: _user_label(u) for u in users}
-        selected_uid2 = st.selectbox(
-            "Kullanıcı",
-            options=list(user_map2.keys()),
-            format_func=lambda i: user_map2[i],
-            key="pwd_user_select",
-        )
-        newp = st.text_input("Yeni Şifre", type="password")
-        if st.button("Sıfırla"):
-            if not newp:
-                st.error("Yeni şifre girin.")
-            else:
+            # takım
+            team_opt2 = ["(yok)"] + [t.name for t in teams]
+            current_team_name = team_id_to_name.get(sel_user.team.id, "(yok)") if getattr(sel_user, "team", None) else "(yok)"
+            new_team_name = st.selectbox("Takım", options=team_opt2, index=team_opt2.index(current_team_name))
+            new_team_id = None if new_team_name == "(yok)" else next((t.id for t in teams if t.name == new_team_name), None)
+
+            # departman multiselect (çoklu)
+            current_dep_ids = [d.id for d in (sel_user.departments or [])]
+            new_dep_ids = st.multiselect(
+                "Departmanlar",
+                options=[d.id for d in deps],
+                default=current_dep_ids,
+                format_func=lambda i: dep_id_to_name.get(i, f"#{i}")
+            )
+
+            if st.button("Kaydet"):
                 db = SessionLocal()
                 try:
-                    reset_password_for_user(db, user_id=selected_uid2, new_password=newp)
-                    st.success("Parola sıfırlandı.")
-                except Exception as e:
-                    st.error(f"Parola sıfırlanamadı: {e}")
+                    update_user_role_team(db, user_id=sel_uid, role=new_role, team_id=new_team_id)
+                    set_user_departments(db, user_id=sel_uid, department_ids=new_dep_ids)
+                    st.success("Kullanıcı güncellendi.")
                 finally:
                     db.close()
+                st.rerun()
+
+    # ---------- Kullanıcı Sil ----------
+    with tabs[2]:
+        if not users:
+            st.info("Silinecek kullanıcı yok.")
+        else:
+            u_opts2 = {f"{(u.full_name or u.username)} (@{u.username})": u.id for u in users}
+            del_label = st.selectbox("Silinecek kullanıcı", options=list(u_opts2.keys()), key="del_user_sel")
+            del_uid = u_opts2[del_label]
+            warn = st.checkbox("Eminim, bu kullanıcı silinsin.", value=False)
+            if st.button("Sil", type="primary", disabled=not warn):
+                db = SessionLocal()
+                try:
+                    delete_user(db, user_id=del_uid)
+                    st.success("Kullanıcı silindi.")
+                finally:
+                    db.close()
+                st.rerun()
+
+    # ---------- Şifre Sıfırla ----------
+    with tabs[3]:
+        if not users:
+            st.info("Kullanıcı yok.")
+        else:
+            u_opts3 = {f"{(u.full_name or u.username)} (@{u.username})": u.id for u in users}
+            pw_label = st.selectbox("Kullanıcı", options=list(u_opts3.keys()), key="pw_user_sel")
+            pw_uid = u_opts3[pw_label]
+            new_pwd = st.text_input("Yeni Şifre", type="password")
+            if st.button("Şifreyi Sıfırla"):
+                if not new_pwd or len(new_pwd) < 6:
+                    st.error("Şifre en az 6 karakter olmalı.")
+                else:
+                    db = SessionLocal()
+                    try:
+                        reset_password_for_user(db, user_id=pw_uid, new_password=new_pwd)
+                        st.success("Şifre güncellendi.")
+                    finally:
+                        db.close()
+                    st.rerun()
+
+    # ---------- Liste ----------
+    with tabs[4]:
+        if not users:
+            st.info("Kullanıcı yok.")
+        else:
+            st.write("Mevcut kullanıcılar:")
+            for u in users:
+                dept_names = ", ".join([d.name for d in (u.departments or [])]) or "-"
+                team_name = (u.team.name if getattr(u, "team", None) else "-")
+                st.write(f"• **{u.full_name or u.username}** (@{u.username})  —  Rol: **{u.role}**,  Departmanlar: {dept_names},  Takım: {team_name}")
 
 if __name__ == "__main__":
     page()

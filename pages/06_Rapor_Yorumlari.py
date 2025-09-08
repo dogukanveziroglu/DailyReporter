@@ -1,13 +1,17 @@
 from __future__ import annotations
 import streamlit as st
 from datetime import date
-from typing import List
+from typing import List, Optional
 
 from app.core.rbac import require_min_role, ROLE_ADMIN
 from app.db.database import SessionLocal
 from app.db.repository import (
-    list_departments, list_users_simple, list_reports_for_users,
-    list_comments_tree_by_report_ids, add_comment
+    list_departments,
+    list_user_ids_in_department,
+    list_reports_for_department,
+    list_users_simple,
+    list_comments_tree_by_report_ids,
+    add_comment,
 )
 from app.utils.dates import today_tr, fmt_hm_tr, parse_iso_dt
 from app.ui.nav import build_sidebar
@@ -19,10 +23,11 @@ build_sidebar()
 def page():
     st.title("🗨️ Rapor Yorumları (Admin)")
 
+    # Ortak veriler
     db = SessionLocal()
     try:
         deps = list_departments(db)
-        users_all = list_users_simple(db)
+        users_all = list_users_simple(db)  # isim haritası için
     finally:
         db.close()
 
@@ -37,16 +42,23 @@ def page():
     )
     d: date = st.date_input("Tarih", value=today_tr())
 
-    user_ids: List[int] = [u.id for u in users_all if (u.department and u.department.id == dep_id)]
+    # Departmandaki kullanıcı kimlikleri (çoktan-çoka)
+    db = SessionLocal()
+    try:
+        user_ids: List[int] = list_user_ids_in_department(db, department_id=dep_id)
+    finally:
+        db.close()
+
     if not user_ids:
         st.info("Bu departmanda kullanıcı yok.")
         return
 
     name_map = {u.id: (u.full_name or u.username) for u in users_all}
 
+    # Raporları getir (departman + gün)
     db = SessionLocal()
     try:
-        reports = list_reports_for_users(db, user_ids=user_ids, start=d, end=d, q=None)
+        reports = list_reports_for_department(db, department_id=dep_id, d=d)
         tree_map = list_comments_tree_by_report_ids(db, report_ids=[r.id for r in reports])
     finally:
         db.close()
@@ -60,9 +72,9 @@ def page():
         with st.expander(f"👤 {owner} · 📅 {r.date} · 🏷️ {r.project or '-'}", expanded=False):
             st.markdown(r.content)
 
-            # Mevcut yorumları sadece OKUMA olarak göster (yanıt yok)
-            st.markdown("**Yorumlar**")
+            # Mevcut yorumlar (okuma)
             cmts = tree_map.get(r.id, [])
+            st.markdown("**Yorumlar**")
             if not cmts:
                 st.caption("Henüz yorum yok.")
             else:
@@ -73,10 +85,10 @@ def page():
                     st.markdown(f"{prefix} **_{who}_ — {ts}**  \n{prefix} {c.content}")
 
             st.divider()
-            # SADECE ÜST SEVİYE YORUM
+            # SADECE ÜST SEVİYE YORUM (admin)
             st.markdown("**Yeni yorum ekle (üst seviye)**")
             with st.form(f"cmt_{r.id}"):
-                txt = st.text_area("Yorum", key=f"txt_{r.id}", height=120)
+                txt = st.text_area("Yorum", key=f"txt_{r.id}", height=120, placeholder="Yalnızca üst seviye yorum eklenir.")
                 ok = st.form_submit_button("Ekle")
             if ok:
                 if not (txt or "").strip():
@@ -88,8 +100,8 @@ def page():
                             db,
                             report_id=r.id,
                             author_user_id=st.session_state["auth"]["user_id"],
-                            content=txt,
-                            parent_comment_id=None,
+                            content=txt.strip(),
+                            parent_comment_id=None,  # yanıt yok
                         )
                         st.success("Yorum eklendi.")
                     finally:
